@@ -1,0 +1,331 @@
+---
+title: "Time Series Analysis of International Airline Passengers"
+author: "Ryan Gan, Isabelle Lambert, Lucas Morgan, Lukas Pokhrel, Spencer Wu"
+date: "3/1/2019"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, echo=F, warning=F, message=F}
+knitr::opts_chunk$set(echo=TRUE, 
+                      cache=FALSE, 
+                      fig.align='center')
+indent1 = '    '      
+indent2 = paste(rep(indent1, 2), collapse='')
+
+library(dplyr)
+library(robustbase)
+library(qpcR)
+library(rgl)
+library(MuMIn)
+library(forecast)
+library(MASS)
+library(kableExtra)
+library(TSA)
+library(tseries)
+library(astsa)
+
+```
+
+### Abstract
+
+The objective of this project is to forecast future international airline passenger numbers using time series techniques. We used various data transforming techniques in order to fit a SARIMA model to the data. Some of the methods we explored included box-cox, logarithm, square root, and differencing. Ultimately we utilized a box cox transformation with $\lambda=0.05$ in order to control heteroscedasticity. We also performed differencing onto the data: once at lag one and once at lag twelve. We ultimately concluded that the best fit model for our data was a SARIMA$(0,1,1)(0,1,1)_{12}$ model. 
+
+### Introduction/describe data
+
+The data that we explored measured monthly international airline passengers. The two variables included time, in terms of month and year, and monthly totals of airline passengers in thousands. The data included 144 observations beginning in January 1949 and ending in December 1960. We began data exploration by plotting the time series. The plot shows clear monthly seasonality and an upward trend. 
+
+```{r, echo=F}
+airline <- read.csv("~/Downloads/international-airline-passengers.csv", header=TRUE) #read in file
+airline<- airline[1:144,]
+airline.ts<- ts(airline[,2]) #convert data into time series format
+airline.seasonal = ts(airline[,2], start=c(1949,01), frequency = 12)
+plot.ts(airline.ts, main = "International airline passengers", xlab = "Time (Months)", ylab="Monthly totals in thousands")
+
+```
+
+We took a closer look at the seasonality by creating a seasonal plot of the observations by year. The seasonal plot shows a clear pattern by month that is evident in each year's data. 
+
+```{r, echo=F}
+seasonplot(airline.seasonal, year.labels = TRUE, year.labels.left=TRUE, col=rainbow(20), pch=19, main = "Seasonal Plot", xlab = "Month", ylab = "Monthly totals in thousands")
+
+```
+
+To get a further idea of how the data was impacted by the seasonality and trend, we created a decomposition plot. This plot is able to clearly show the upward trend and seasonality.
+
+```{r, echo=F}
+plot(stl(airline.seasonal, s.window="periodic"), main= "Decomposition Plot")
+
+```
+
+
+### Transformations
+
+To transform our data into a stationary series, we first looked to variance smoothing transformations. We tested three transformations: box-cox, square root, and logarithm. We calculated the ideal $\lambda$ for a box-cox transformation to be 0.05. The resulting plots are below.
+
+```{r, echo=F}
+# three transformations 
+#boxcox
+lambda<- BoxCox.lambda(airline.ts, method = "loglik") #lambda=0.05
+airline.bc<- forecast::BoxCox(airline.ts, lambda=lambda) #tranform data
+
+#log
+airline.log <- log(airline.ts) 
+
+# sqrt
+airline.sqrt <- sqrt(airline.ts) 
+
+#compare original and transformed data
+par(mfrow=c(2,2))
+ts.plot(airline.ts, main = "Original Data")
+abline(h = mean(airline.ts),lty = 2,col="red")
+ts.plot(airline.bc,main = "Box-Cox") 
+abline(h = mean(airline.bc),lty = 2,col="orange")
+ts.plot(airline.log,main = "Log")
+abline(h = mean(airline.log),lty = 2,col="green")
+ts.plot(airline.sqrt,main = "Square-Root Transformed Data") 
+abline(h = mean(airline.sqrt),lty = 2,col="blue")
+
+```
+
+Based on the plots, the boxcox transformation seems to do the best job at smoothing the variance over time. We will use a boxcox transformation with $\lambda=0.05$. We then looked at the resulting variances produced from each transformation we tested. 
+ 
+
+```{r, echo=F}
+vars<- data.frame(matrix(ncol=4, nrow=0))
+vars<- (rbind(vars, c(var(airline.ts), var(airline.bc), var(airline.log), var(airline.sqrt))))
+colnames(vars)=c("Original", "Box-Cox", "Log", "Square Root")
+kable(vars, caption = "Variances", booktabs=T) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = 'center') 
+```
+ 
+
+### Remove Seasonality
+
+We were able to see from our time series plot that the data has clear monthly seasonality. To remove this for model building we differenced at lag 12. Below is the resulting plot compared to the original. The transformation seems to be adequate to remove monthly seasonality. 
+
+
+```{r,echo=F}
+#difference at lag=12 to remove seasonality component
+airline.d12 <- diff(airline.bc,lag=12, differences=1)
+par(mfrow=c(1,2))
+ts.plot(airline.d12, main = expression(nabla[12]), ylab="")
+abline(h = mean(airline.d12),lty = 2,col="blue")
+ts.plot(airline.bc, main = "Original data", ylab="", xlab = "Time")
+abline(h = mean(airline.bc),lty = 2,col="blue")
+
+
+#show variances before and after differencing
+vars.dif<- data.frame()
+vars.dif<- (rbind(vars.dif, c("Original", var(airline.bc)), c("Differenced at lag 12", var(airline.d12)), 
+                  stringsAsFactors=F))
+colnames(vars.dif)=c("Model", "Variance")
+#kable(vars.dif, booktabs=T) %>%
+#  kable_styling(bootstrap_options = "striped", full_width = F, position = 'center') 
+
+
+```
+
+
+### Remove trend
+
+The original time series plot, and decomposition plot implied there was an upward trend in observations. To remedy this we then differenced at lag 1 on our already transformed data. It decreased the variance and improved the time plot. We then differenced again at lag 1 to see if that would also improve our data. The variance increased suggesting overdifferencing. Therefore, we concluded the ideal transformation to be $\nabla\nabla_{12}$. The resulting time series plot also appears to be more stationary then the previous plots. 
+
+```{r, echo=F}
+airline.d12.d1 <- diff(airline.d12,lag=1, differences=1) #difference at lag 1
+par(mfrow=c(1,2))
+ts.plot(airline.d12.d1, main = expression(nabla*nabla[12]), ylab="")
+abline(h = mean(airline.d12.d1),lty = 2,col="blue")
+ts.plot(airline.d12, main = expression(nabla[12]), ylab="", xlab = "Time")
+abline(h = mean(airline.d12),lty = 2,col="blue")
+
+
+airline.test <- diff(airline.d12.d1, lag=1, differences=1) #difference again to test 
+
+
+vars.dif<- (rbind(vars.dif, c("Differenced at lag 12 and lag 1", var(airline.d12.d1)), c("Differenced at lag 12, and lag 1 twice", var(airline.test))))
+kable(vars.dif, booktabs=T) %>%
+  kable_styling(bootstrap_options = "striped", full_width = T, position = 'center') %>%
+  column_spec(1:2, bold = T) %>%
+  row_spec(3, bold = T, color = "white", background = "#D7261E")
+```
+
+### Initial Model Estimation
+
+To begin fitting a model to our data, we plotted the ACF and PACF graphs of the differenced dataset. The ACF graph spikes at lag 12, suggesting a SMA(1) component to our ideal model. The PACF graph is a little bit harder to read, it seems that there could be a spike at lag 12, or that it is tailing off. 
+
+
+```{r, echo=F}
+par(mfrow=c(1,2))
+acf(airline.d12.d1,main="")
+pacf(airline.d12.d1,ylab="PACF",main="")
+title(expression("ACF and PACF "(nabla*nabla[12])),outer=T,line=-1)
+
+```
+
+
+
+### Fitting a SARIMA model
+
+Our objective is to fit an appropriate SARIMA model to the data. From our previous exploration we know that the appropriate d=1 and D=1. We wished to test various posibilities for AR, MA, SAR, and SMA aspects to a model. To do this, we created a for loop that looped through possible values for p,q,P,and Q. We preset d=1, and D=1. We let p and q range from 0 to 2 and P and Q from 0 to 1. We looked at the models with the lowest AIC values. We then chose to continue with the 2 models with the lowest AIC values.
+
+```{r, echo=F, message=F, warning=F}
+chart<- data.frame() ##for loop to identify p,q,P,Q using AIC
+
+for (p in 0:2) {
+  for (q in 0:2) {
+    for (P in 0:1){
+      for (Q in 0:1){
+        values<- c(p,q,P,Q, arima(airline.bc, order = c(p, 1, q), method = c("ML"), seasonal=list(order=c(P,1,Q), period=12))$aic)
+        chart=rbind(chart,values)
+      }
+    }
+  }
+}
+
+colnames(chart)=c("p", "q", "P", "Q", "AIC")
+chart2 <- chart[order(chart$AIC),] 
+chart2[1:5, ] %>%
+  mutate(AIC = cell_spec(AIC, color = "white", bold = T, background = spec_color(1:5, end = 0.9, option = "A", direction = -1))) %>%
+  kable(escape = F) %>%
+  kable_styling(c("striped", "condensed"), full_width = F)
+
+```
+
+
+
+```{r, echo=F}
+#Model 1: 
+mod1<- arima(airline.bc, order = c(0, 1, 1), method = c("ML"), seasonal=list(order=c(0,1,1), period=12))
+
+#Model 2: 
+mod2<- arima(airline.bc, order = c(2, 1, 1), seasonal=list(order=c(0,1,1), period=12, method = c("ML")))
+
+
+```
+
+
+
+###Diagnostics
+
+
+```{r, echo=F}
+# path of your working directory
+source("plot.roots.R.txt")
+source("spec.arma.R") 
+#model 1
+#Check models for unit roots
+plot.roots(NULL,polyroot(c(1, -0.3947 , -0.5397)), main="SARMA(0,1,1)x(0,1,1)_12 roots of MA part")
+
+#model 2
+#Check models for unit roots
+par(mfrow=c(1,2))
+plot.roots(NULL,polyroot(c(1, -0.5639 , -0.2486)), main="SARIMA(2,1,1)x(0,1,1)_12 roots of AR part")
+plot.roots(NULL,polyroot(c(1, -0.9737 , -0.5406)), main="SARIMA(2,1,1)x(0,1,1)_12 roots of MA part")
+
+
+```
+
+There appears to be an MA root within the unit circle for the SARIMA$(2,1,1)(0,1,1)_{12}$ model. The issue that we ran into is likely because our model needs an additional component that is beyond the scope of our modeling techniques. 
+
+### Normality checking
+
+The QQ Plots and histograms for our models appear to be reasonably normal.
+
+
+```{r, echo=F}
+#Plot qq and histograms of residuals to check for normality
+par(mfrow=c(2,2))
+qqnorm(residuals(mod1), main="QQ Model 1") 
+qqline(residuals(mod1))
+qqnorm(residuals(mod2), main="QQ Model 2")
+qqline(residuals(mod2))
+hist(residuals(mod1), main="Histogram of Residuals for Model 1", breaks=30, col="aquamarine4", freq = F)
+hist(residuals(mod2), main="Histogram of Residuals for Model 2", breaks=30, col="aquamarine4", freq = F)
+```
+
+```{r, echo=F}
+# Test for normality of residuals
+par(mfrow=c(1,2))
+ts.plot(residuals(mod1),main = "Fitted Residuals for Model 1")
+abline(h = mean(residuals(mod1)),lty = 2,col="blueviolet")
+ts.plot(residuals(mod2),main = "Fitted Residuals for Model 2")
+abline(h = mean(residuals(mod2)),lty = 2,col="blueviolet")
+
+shap.1<- shapiro.test(residuals(mod1))
+shap.2<- shapiro.test(residuals(mod2))
+
+
+shapiro.tests<- data.frame()
+shapiro.tests<- rbind(shapiro.tests, c(round(shap.1$statistic, digits=3), shap.1$p.value), c(round(shap.2$statistic, digits=3), shap.2$p.value))
+colnames(shapiro.tests)=c("W-Statistic", "P-Value")
+rownames(shapiro.tests)=c("Model 1", "Model 2")
+
+kable(shapiro.tests, caption= "Shapiro-Wilk Normality Test", booktabs=T) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F) 
+
+```
+
+Model 1 passes the Shapiro-Wilk Normality test with $\alpha$ above 0.05, Model 2 does not.
+
+### Heteroscedasticity checking
+
+The ACF and PACF of the residuals for both models fall within the confidence intervals, so they can all be counted as 0's and indicate no heteroscedasticity. 
+
+```{r, echo=F}
+par(mfrow=c(2,2))
+acf(residuals(mod1), main="ACF Model 1 residuals")
+pacf(residuals(mod1), main="PACF Model 1 residuals")
+acf(residuals(mod2), main="ACF Model 2 residuals")
+pacf(residuals(mod2), main="PACF Model 2 residuals")
+```
+
+### Independence (Serial Correlation) Checking
+
+We perform two tests: the Ljung-Box Test and the Box-Pierce Test at $\alpha=.05$. $H_{0}$= Residuals are serially uncorrelated. $H_{1}$= Residuals are not serially uncorrelated. All p-values are above 0.05, so we do not reject the assumption of serial uncorrelation between the residuals in either model. 
+
+```{r, echo=F}
+#Ljung Box 
+ljung.1<- Box.test(residuals(mod1), type = "Ljung")
+ljung.2<- Box.test(residuals(mod2), type = "Ljung")
+
+#Box Pierce
+pierce.1<- Box.test(residuals(mod1), type = "Box-Pierce")
+pierce.2<- Box.test(residuals(mod2), type = "Box-Pierce")
+
+corr.tests<- data.frame()
+corr.tests<- rbind(corr.tests, c(pierce.1$p.value, ljung.1$p.value), c(pierce.2$p.value, ljung.2$p.value))
+
+colnames(corr.tests)=c("Box-Pierce", "Ljung-Box")
+rownames(corr.tests)=c("Model 1", "Model 2")
+
+kable(corr.tests, caption= "", booktabs=T) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+
+Both models pass our diagnostic checks. We decide to use the SARMA(0,1,1)x(0,1,1)_12 order model because it passes all diagnostic checks. Therefore, we conclude that our best fit model is 
+
+###Forecasting
+
+
+```{r, echo=F}
+
+mypred2 <- predict(mod1, n.ahead=24)
+ts.plot(airline.bc, main="Forecast of Transformed data", xlim=c(0,170))
+points(146:169,mypred2$pred, col="red")
+lines(146:169,mypred2$pred+1.96*mypred2$se,lty=2, col="blue")
+lines(146:169,mypred2$pred-1.96*mypred2$se,lty=2, col="blue")
+lines(mypred2$pred, col="red")
+
+
+mypred.original<- forecast::InvBoxCox(mypred2$pred, lambda=lambda) #inv box cox to revert to original
+mypred.original.se<- InvBoxCox(mypred2$se, lambda=lambda)
+ts.plot(airline.ts,  main="Forecast of Original data", xlim=c(0,170))
+lines(146:169,mypred.original+1.96*mypred.original.se,lty=2, col="blue")
+lines(146:169,mypred.original-1.96*mypred.original.se,lty=2, col="blue")
+points(146:169,mypred.original, col="red")
+lines(mypred.original, col="red")
+```
+
